@@ -10,6 +10,8 @@ type fileSink struct {
 	path string
 }
 
+// ToFile constructs a sink from the given file path. Writing to the file while
+// reading from it (via FromFile) won't corrupt the file.
 func ToFile(path string) Sink {
 	return &fileSink{path}
 }
@@ -32,6 +34,7 @@ type byteChannel struct {
 	ch chan []byte
 }
 
+// ToChannel constructs a sink which sends all data to the given channel.
 func ToChannel(ch chan []byte) Sink {
 	return &byteChannel{ch}
 }
