@@ -54,7 +54,7 @@ func TestUpdateFromWeb(t *testing.T) {
 	runner.OnSinkError = func(s Sink, err error) {
 		assert.Fail(t, "unexpected sink error "+err.Error())
 	}
-	stop := runner.Start(100 * time.Millisecond)
+	stop := runner.Start(10 * time.Millisecond)
 	got := make(chan bool)
 	go func() {
 		for b := range ch {
@@ -70,12 +70,12 @@ func TestUpdateFromWeb(t *testing.T) {
 }
 
 type byteSource struct {
-	calls       int32
-	lastUpdated time.Time
+	calls        int32
+	lastModified time.Time
 }
 
 func (s *byteSource) Fetch(ifNewerThan time.Time) (io.ReadCloser, error) {
-	if ifNewerThan.After(s.lastUpdated) {
+	if ifNewerThan.After(s.lastModified) {
 		return nil, ErrUnmodified
 	}
 	atomic.AddInt32(&s.calls, 1)
@@ -84,7 +84,7 @@ func (s *byteSource) Fetch(ifNewerThan time.Time) (io.ReadCloser, error) {
 
 func TestIfNewerThan(t *testing.T) {
 	ch := make(chan []byte)
-	s := byteSource{lastUpdated: time.Now()}
+	s := byteSource{lastModified: time.Now()}
 	runner := New(&s, ToChannel(ch))
 	stop := runner.Start(10 * time.Millisecond)
 	var updates int32
@@ -97,4 +97,14 @@ func TestIfNewerThan(t *testing.T) {
 	stop()
 	assert.EqualValues(t, 1, atomic.LoadInt32(&s.calls))
 	assert.EqualValues(t, 1, atomic.LoadInt32(&updates))
+
+	// Now make sure it does not fetch the source if it's not newer than what
+	// got from InitFrom.
+	runner = New(&s, ToChannel(ch))
+	runner.InitFrom(&s)
+	assert.EqualValues(t, 2, atomic.LoadInt32(&s.calls))
+	stop = runner.Start(10 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
+	stop()
+	assert.EqualValues(t, 2, atomic.LoadInt32(&s.calls))
 }
