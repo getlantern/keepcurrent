@@ -66,18 +66,20 @@ func (runner *Runner) Start(interval time.Duration) func() {
 	}
 	tk := time.NewTicker(interval)
 	chStop := make(chan struct{})
+	chStopped := make(chan struct{})
 	go func() {
 		for {
 			runner.syncOnce(runner.source, chStop)
 			select {
 			case <-chStop:
 				tk.Stop()
+				close(chStopped)
 				return
 			case <-tk.C:
 			}
 		}
 	}()
-	return func() { close(chStop) }
+	return func() { close(chStop); <-chStopped }
 }
 
 func (runner *Runner) syncOnce(from Source, chStop chan struct{}) {

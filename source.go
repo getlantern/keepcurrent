@@ -138,7 +138,7 @@ func (s *fileSource) Fetch(ifNewerThan time.Time) (io.ReadCloser, error) {
 	if err != nil {
 		return nil, err
 	}
-	if ifNewerThan.After(fi.ModTime()) {
+	if ifNewerThan.Before(fi.ModTime()) {
 		return nil, ErrUnmodified
 	}
 	return f, nil
