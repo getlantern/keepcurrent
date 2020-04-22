@@ -57,8 +57,8 @@ func TestUpdateFromWeb(t *testing.T) {
 	runner.OnSinkError = func(s Sink, err error) {
 		assert.Fail(t, "unexpected sink error "+err.Error())
 	}
-	stop := runner.Start(10 * time.Millisecond)
-	got := make(chan bool)
+	stop := runner.Start(10 * time.Second)
+	got := make(chan bool, 1)
 	go func() {
 		for b := range ch {
 			data := make(map[string]interface{})

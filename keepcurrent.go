@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"io/ioutil"
 	"time"
 )
 
@@ -83,42 +84,35 @@ func (runner *Runner) Start(interval time.Duration) func() {
 }
 
 func (runner *Runner) syncOnce(from Source, chStop chan struct{}) {
+	var data []byte
 	for tries := 1; ; tries++ {
 		start := time.Now()
 		rc, err := from.Fetch(runner.lastUpdated)
 		if err == ErrUnmodified {
 			return
 		}
-		var buf bytes.Buffer
 		if err == nil {
 			// Read ahead to surface any error reading from the source
-			_, err = io.Copy(&buf, rc)
+			data, err = ioutil.ReadAll(rc)
 			rc.Close()
 		}
-		if err != nil {
-			d := runner.OnSourceError(err, tries)
-			if d == 0 {
-				return
-			}
-			select {
-			case <-chStop:
-				return
-			case <-time.After(d):
-				continue
-			}
+		if err == nil {
+			runner.lastUpdated = start
+			break
 		}
-		runner.lastUpdated = start
-		if len(runner.sinks) == 1 {
-			s := runner.sinks[0]
-			if err := s.UpdateFrom(&buf); err != nil {
-				runner.OnSinkError(s, err)
-			}
-		} else {
-			for _, s := range runner.sinks {
-				if err := s.UpdateFrom(bytes.NewReader(buf.Bytes())); err != nil {
-					runner.OnSinkError(s, err)
-				}
-			}
+		d := runner.OnSourceError(err, tries)
+		if d == 0 {
+			return
+		}
+		select {
+		case <-chStop:
+			return
+		case <-time.After(d):
+		}
+	}
+	for _, s := range runner.sinks {
+		if err := s.UpdateFrom(bytes.NewReader(data)); err != nil {
+			runner.OnSinkError(s, err)
 		}
 	}
 }
