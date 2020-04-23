@@ -1,7 +1,6 @@
 package keepcurrent
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,8 +10,6 @@ import (
 
 	"github.com/mholt/archiver"
 )
-
-var errNotFoundInArchive = errors.New("file not found in archive")
 
 type webSource struct {
 	url    string
@@ -101,7 +98,6 @@ func (s *tarGzSource) Fetch(ifNewerThan time.Time) (io.ReadCloser, error) {
 			return chainedCloser{f, rc}, nil
 		}
 	}
-	return nil, errNotFoundInArchive
 }
 
 type chainedCloser []io.ReadCloser
@@ -138,7 +134,7 @@ func (s *fileSource) Fetch(ifNewerThan time.Time) (io.ReadCloser, error) {
 	if err != nil {
 		return nil, err
 	}
-	if ifNewerThan.After(fi.ModTime()) {
+	if ifNewerThan.Before(fi.ModTime()) {
 		return nil, ErrUnmodified
 	}
 	return f, nil

@@ -18,8 +18,10 @@ func TestReadWriteSameFile(t *testing.T) {
 	name, content := writeTempFile(t)
 	defer os.Remove(name)
 	runner := New(FromFile(name), ToFile(name))
-	runner.OnSourceError = func(err error) {
+	runner.OnSourceError = func(err error, tries int) time.Duration {
+		assert.Equal(t, 1, tries)
 		assert.NoError(t, err)
+		return 0
 	}
 	runner.OnSinkError = func(s Sink, err error) {
 		assert.NoError(t, err)
@@ -48,14 +50,15 @@ func TestUpdateFromWeb(t *testing.T) {
 	ch := make(chan []byte)
 	url := "https://httpbin.org/get"
 	runner := New(FromWeb(url), ToChannel(ch))
-	runner.OnSourceError = func(err error) {
+	runner.OnSourceError = func(err error, tries int) time.Duration {
 		assert.Fail(t, "unexpected source error "+err.Error())
+		return 0
 	}
 	runner.OnSinkError = func(s Sink, err error) {
 		assert.Fail(t, "unexpected sink error "+err.Error())
 	}
-	stop := runner.Start(10 * time.Millisecond)
-	got := make(chan bool)
+	stop := runner.Start(10 * time.Second)
+	got := make(chan bool, 1)
 	go func() {
 		for b := range ch {
 			data := make(map[string]interface{})
@@ -70,8 +73,9 @@ func TestUpdateFromWeb(t *testing.T) {
 }
 
 type byteSource struct {
-	calls        int32
-	lastModified time.Time
+	remainingFailures int32
+	calls             int32
+	lastModified      time.Time
 }
 
 func (s *byteSource) Fetch(ifNewerThan time.Time) (io.ReadCloser, error) {
@@ -79,20 +83,29 @@ func (s *byteSource) Fetch(ifNewerThan time.Time) (io.ReadCloser, error) {
 		return nil, ErrUnmodified
 	}
 	atomic.AddInt32(&s.calls, 1)
+	if atomic.AddInt32(&s.remainingFailures, -1) > 0 {
+		// keeps failing with io.ErrUnexpectedEOF
+		return ioutil.NopCloser(s), nil
+	}
 	return ioutil.NopCloser(bytes.NewBuffer([]byte("abcde"))), nil
+}
+
+func (s *byteSource) Read(p []byte) (int, error) {
+	return 0, io.ErrUnexpectedEOF
 }
 
 func TestIfNewerThan(t *testing.T) {
 	ch := make(chan []byte)
-	s := byteSource{lastModified: time.Now()}
-	runner := New(&s, ToChannel(ch))
-	stop := runner.Start(10 * time.Millisecond)
 	var updates int32
 	go func() {
 		for range ch {
 			atomic.AddInt32(&updates, 1)
 		}
 	}()
+
+	s := byteSource{lastModified: time.Now()}
+	runner := New(&s, ToChannel(ch))
+	stop := runner.Start(10 * time.Millisecond)
 	time.Sleep(100 * time.Millisecond)
 	stop()
 	assert.EqualValues(t, 1, atomic.LoadInt32(&s.calls))
@@ -107,4 +120,33 @@ func TestIfNewerThan(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	stop()
 	assert.EqualValues(t, 2, atomic.LoadInt32(&s.calls))
+}
+
+func TestBackoffOnFail(t *testing.T) {
+	ch := make(chan []byte)
+	var updates int32
+	go func() {
+		for range ch {
+			atomic.AddInt32(&updates, 1)
+		}
+	}()
+
+	s := byteSource{lastModified: time.Now(), remainingFailures: 5}
+	runner := New(&s, ToChannel(ch))
+	var finalFailures int32
+	runner.OnSourceError = ExpBackoffThenFail(time.Millisecond, 3, func(err error) {
+		atomic.AddInt32(&finalFailures, 1)
+	})
+	stop := runner.Start(100 * time.Millisecond)
+	defer stop()
+	time.Sleep(50 * time.Millisecond)
+	// The first synchronization should have failed
+	assert.EqualValues(t, 3, atomic.LoadInt32(&s.calls))
+	assert.EqualValues(t, 0, atomic.LoadInt32(&updates))
+	assert.EqualValues(t, 1, atomic.LoadInt32(&finalFailures))
+	time.Sleep(150 * time.Millisecond)
+	// The second round of synchronization should have completed
+	assert.EqualValues(t, 5, atomic.LoadInt32(&s.calls))
+	assert.EqualValues(t, 1, atomic.LoadInt32(&updates))
+	assert.EqualValues(t, 1, atomic.LoadInt32(&finalFailures))
 }
