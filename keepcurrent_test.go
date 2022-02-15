@@ -7,6 +7,7 @@ import (
 	"io"
 	"io/ioutil"
 	"os"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -15,9 +16,64 @@ import (
 )
 
 func TestReadWriteSameFile(t *testing.T) {
-	name, content := writeTempFile(t)
+	b := make([]byte, 1024*1024)
+	_, err := rand.Read(b)
+	assert.NoError(t, err)
+
+	name, content := writeTempFile(t, b)
 	defer os.Remove(name)
 	runner := New(FromFile(name), ToFile(name))
+	runner.OnSourceError = func(err error, tries int) time.Duration {
+		assert.Equal(t, 1, tries)
+		assert.NoError(t, err)
+		return 0
+	}
+	runner.OnSinkError = func(s Sink, err error) {
+		assert.NoError(t, err)
+	}
+	stop := runner.Start(10 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
+	stop()
+	b, err = ioutil.ReadFile(name)
+	assert.NoError(t, err)
+	assert.Equal(t, b, content)
+}
+
+func TestReadWriteWithPreprocessor(t *testing.T) {
+	rot13 := func(r rune) rune {
+		if r >= 'a' && r <= 'z' {
+			// Rotate lowercase letters 13 places.
+			if r >= 'm' {
+				return r - 13
+			} else {
+				return r + 13
+			}
+		} else if r >= 'A' && r <= 'Z' {
+			// Rotate uppercase letters 13 places.
+			if r >= 'M' {
+				return r - 13
+			} else {
+				return r + 13
+			}
+		}
+		// Do nothing.
+		return r
+	}
+	name, content := writeTempFile(t, []byte(strings.Map(rot13, "test input")))
+	defer os.Remove(name)
+	preWrite := func(r io.Reader) (io.Reader, error) {
+		b, _ := ioutil.ReadAll(r)
+		s := strings.Map(rot13, string(b))
+		return strings.NewReader(s), nil
+	}
+
+	postRead := func(r io.ReadCloser) (io.ReadCloser, error) {
+		b, _ := ioutil.ReadAll(r)
+		s := strings.Map(rot13, string(b))
+		return ioutil.NopCloser(strings.NewReader(s)), nil
+	}
+
+	runner := New(FromFileWithPreprocessor(name, postRead), ToFileWithPreprocessor(name, preWrite))
 	runner.OnSourceError = func(err error, tries int) time.Duration {
 		assert.Equal(t, 1, tries)
 		assert.NoError(t, err)
@@ -34,10 +90,7 @@ func TestReadWriteSameFile(t *testing.T) {
 	assert.Equal(t, b, content)
 }
 
-func writeTempFile(t *testing.T) (string, []byte) {
-	b := make([]byte, 1024*1024)
-	_, err := rand.Read(b)
-	assert.NoError(t, err)
+func writeTempFile(t *testing.T, b []byte) (string, []byte) {
 	f, err := ioutil.TempFile(os.TempDir(), "keep_current_test")
 	assert.NoError(t, err)
 	_, err = f.Write(b)
