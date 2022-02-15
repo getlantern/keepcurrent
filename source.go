@@ -2,13 +2,12 @@ package keepcurrent
 
 import (
 	"fmt"
+	"github.com/mholt/archiver/v3"
 	"io"
 	"net/http"
 	"os"
 	"sync"
 	"time"
-
-	"github.com/mholt/archiver"
 )
 
 type webSource struct {
@@ -38,7 +37,7 @@ func (s *webSource) Fetch(ifNewerThan time.Time) (io.ReadCloser, error) {
 		req.Header.Add("If-Modified-Since", ifNewerThan.Format(http.TimeFormat))
 	}
 	if s.getETag() != "" {
-		req.Header.Add("Etag", s.etag)
+		req.Header.Add("If-None-Match", s.etag)
 	}
 	resp, err := s.client.Do(req)
 	if err != nil {
@@ -117,12 +116,18 @@ func (cc chainedCloser) Close() error {
 }
 
 type fileSource struct {
-	path string
+	path         string
+	preprocessor func(io.ReadCloser) (io.ReadCloser, error)
 }
 
 // FromFile constructs a source from the given file path.
 func FromFile(path string) Source {
-	return &fileSource{path}
+	return &fileSource{path, nil}
+}
+
+// FromFileWithPreprocessor constructs a source from the given file path, while modifying the file data using preprocessor function
+func FromFileWithPreprocessor(path string, preprocessor func(io.ReadCloser) (io.ReadCloser, error)) Source {
+	return &fileSource{path, preprocessor}
 }
 
 func (s *fileSource) Fetch(ifNewerThan time.Time) (io.ReadCloser, error) {
@@ -137,5 +142,13 @@ func (s *fileSource) Fetch(ifNewerThan time.Time) (io.ReadCloser, error) {
 	if !ifNewerThan.IsZero() && ifNewerThan.Before(fi.ModTime()) {
 		return nil, ErrUnmodified
 	}
-	return f, nil
+	var result io.ReadCloser
+	result = f
+	if s.preprocessor != nil {
+		result, err = s.preprocessor(f)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return result, nil
 }
