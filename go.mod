@@ -1,6 +1,6 @@
 module github.com/getlantern/keepcurrent
 
-go 1.13
+go 1.17
 
 require (
 	github.com/kr/pretty v0.3.0 // indirect
