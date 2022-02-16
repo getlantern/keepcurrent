@@ -7,13 +7,19 @@ import (
 )
 
 type fileSink struct {
-	path string
+	path         string
+	preprocessor func(io.Reader) (io.Reader, error)
 }
 
 // ToFile constructs a sink from the given file path. Writing to the file while
 // reading from it (via FromFile) won't corrupt the file.
 func ToFile(path string) Sink {
-	return &fileSink{path}
+	return &fileSink{path, nil}
+}
+
+// ToFileWithPreprocessor constructs a sink from the given file path while modifying the data before writing to disk.
+func ToFileWithPreprocessor(path string, preprocessor func(io.Reader) (io.Reader, error)) Sink {
+	return &fileSink{path, preprocessor}
 }
 
 func (s *fileSink) UpdateFrom(r io.Reader) error {
@@ -22,6 +28,12 @@ func (s *fileSink) UpdateFrom(r io.Reader) error {
 		return err
 	}
 	defer f.Close()
+	if s.preprocessor != nil {
+		r, err = s.preprocessor(r)
+		if err != nil {
+			return err
+		}
+	}
 	_, err = io.Copy(f, r)
 	return err
 }
