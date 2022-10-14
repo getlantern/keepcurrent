@@ -1,5 +1,5 @@
-// Package keepcurrent periodically poll from the source and if it's changed,
-// sync with a set of destinations
+// Package keepcurrent periodically polls from the source and if it's changed,
+// syncs with a set of destinations
 
 package keepcurrent
 
