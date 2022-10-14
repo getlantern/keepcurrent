@@ -1,10 +1,8 @@
 package keepcurrent
 
 import (
-	"bytes"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"os"
 	"sync"
@@ -154,30 +152,4 @@ func (s *fileSource) Fetch(ifNewerThan time.Time) (io.ReadCloser, error) {
 		}
 	}
 	return result, nil
-}
-
-type validatingSource struct {
-	Source
-	validate func([]byte) error
-}
-
-// ValidatingSource wraps a given source with a validation function.
-func ValidatingSource(wrapped Source, validate func(data []byte) error) Source {
-	return &validatingSource{Source: wrapped, validate: validate}
-}
-
-func (s *validatingSource) Fetch(ifNewerThan time.Time) (io.ReadCloser, error) {
-	fetched, err := s.Source.Fetch(ifNewerThan)
-	if err != nil {
-		return fetched, err
-	}
-	data, err := ioutil.ReadAll(fetched)
-	if err != nil {
-		return nil, err
-	}
-	err = s.validate(data)
-	if err != nil {
-		return nil, err
-	}
-	return io.NopCloser(bytes.NewBuffer(data)), nil
 }
