@@ -48,7 +48,7 @@ func (s *webSource) Fetch(ifNewerThan time.Time) (io.ReadCloser, error) {
 		return nil, ErrUnmodified
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Unexpected HTTP status %v", resp.StatusCode)
+		return nil, fmt.Errorf("unexpected HTTP status %v", resp.StatusCode)
 	}
 	etag := resp.Header.Get("ETag")
 	if etag != "" {
