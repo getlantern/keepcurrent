@@ -1,6 +1,9 @@
 package keepcurrent
 
 import (
+	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -8,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mholt/archiver/v3"
+	"github.com/mholt/archives"
 )
 
 type webSource struct {
@@ -80,40 +83,44 @@ func FromTarGz(s Source, expectedName string) Source {
 	return &tarGzSource{s, expectedName}
 }
 
+var errFound = errors.New("found")
+
 func (s *tarGzSource) Fetch(ifNewerThan time.Time) (io.ReadCloser, error) {
 	rc, err := s.s.Fetch(ifNewerThan)
 	if err != nil {
 		return nil, err
 	}
-	unzipper := archiver.NewTarGz()
-	if err := unzipper.Open(rc, 0); err != nil {
+	defer rc.Close()
+
+	format := archives.CompressedArchive{
+		Compression: archives.Gz{},
+		Archival:    archives.Tar{},
+	}
+
+	var buf []byte
+	err = format.Extract(context.Background(), rc, func(ctx context.Context, info archives.FileInfo) error {
+		if info.NameInArchive == s.expectedName {
+			f, err := info.Open()
+			if err != nil {
+				return err
+			}
+			defer f.Close()
+			buf, err = io.ReadAll(f)
+			if err != nil {
+				return err
+			}
+			return errFound
+		}
+		return nil
+	})
+
+	if errors.Is(err, errFound) {
+		return io.NopCloser(bytes.NewReader(buf)), nil
+	}
+	if err != nil {
 		return nil, err
 	}
-	for {
-		f, err := unzipper.Read()
-		if err != nil {
-			return nil, err
-		}
-		if f.Name() == s.expectedName {
-			return chainedCloser{f, rc}, nil
-		}
-	}
-}
-
-type chainedCloser []io.ReadCloser
-
-func (cc chainedCloser) Read(p []byte) (n int, err error) {
-	return cc[0].Read(p)
-}
-
-func (cc chainedCloser) Close() error {
-	var lastError error
-	for _, c := range cc {
-		if err := c.Close(); err != nil {
-			lastError = err
-		}
-	}
-	return lastError
+	return nil, fmt.Errorf("file %q not found in archive", s.expectedName)
 }
 
 type fileSource struct {
