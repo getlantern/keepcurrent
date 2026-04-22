@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path"
 	"sync"
 	"time"
 
@@ -92,14 +93,20 @@ func (s *tarGzSource) Fetch(ifNewerThan time.Time) (io.ReadCloser, error) {
 	}
 	defer rc.Close()
 
+	// archives.CompressedArchive.Extract() reads ca.Extraction (not ca.Archival),
+	// and returns "no extraction format" if it's nil. Setting Archival here was a
+	// bug that made every Fetch() fail silently.
 	format := archives.CompressedArchive{
 		Compression: archives.Gz{},
-		Archival:    archives.Tar{},
+		Extraction:  archives.Tar{},
 	}
 
 	var buf []byte
 	err = format.Extract(context.Background(), rc, func(ctx context.Context, info archives.FileInfo) error {
-		if info.NameInArchive == s.expectedName {
+		// NameInArchive is the full stored path (e.g. "GeoLite2-City_20260116/GeoLite2-City.mmdb").
+		// Callers pass the basename, so compare on basename — mirrors the behavior of the
+		// archiver/v3-based implementation this replaced.
+		if path.Base(info.NameInArchive) == s.expectedName {
 			f, err := info.Open()
 			if err != nil {
 				return err
