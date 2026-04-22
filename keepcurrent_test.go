@@ -1,7 +1,9 @@
 package keepcurrent
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"crypto/rand"
 	"encoding/json"
 	"io"
@@ -202,4 +204,70 @@ func TestBackoffOnFail(t *testing.T) {
 	assert.EqualValues(t, 5, atomic.LoadInt32(&s.calls))
 	assert.EqualValues(t, 1, atomic.LoadInt32(&updates))
 	assert.EqualValues(t, 1, atomic.LoadInt32(&finalFailures))
+}
+
+// bytesSource is a Source that returns a fixed byte slice every Fetch.
+type bytesSource struct{ data []byte }
+
+func (b *bytesSource) Fetch(time.Time) (io.ReadCloser, error) {
+	return io.NopCloser(bytes.NewReader(b.data)), nil
+}
+
+// makeTarGz builds an in-memory .tar.gz containing a single file stored
+// under the given path (e.g. "dir/file") so tests can exercise the basename-
+// match path without shipping a fixture.
+func makeTarGz(t *testing.T, storedPath string, payload []byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	if err := tw.WriteHeader(&tar.Header{
+		Name:     storedPath,
+		Mode:     0644,
+		Size:     int64(len(payload)),
+		Typeflag: tar.TypeReg,
+		ModTime:  time.Now(),
+	}); err != nil {
+		t.Fatalf("tar header: %v", err)
+	}
+	if _, err := tw.Write(payload); err != nil {
+		t.Fatalf("tar write: %v", err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("tar close: %v", err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatalf("gz close: %v", err)
+	}
+	return buf.Bytes()
+}
+
+// Regression test for the two bugs fixed in PR #7: FromTarGz must extract
+// a file whose stored path includes a directory prefix (as MaxMind ships
+// its mmdb tarballs), matched by the basename the caller passes.
+func TestFromTarGzBasenameMatch(t *testing.T) {
+	want := []byte("hello world")
+	tgz := makeTarGz(t, "GeoLite2-City_20260116/GeoLite2-City.mmdb", want)
+
+	src := FromTarGz(&bytesSource{data: tgz}, "GeoLite2-City.mmdb")
+	rc, err := src.Fetch(time.Time{})
+	assert.NoError(t, err, "Fetch should find the file by basename")
+	if err != nil {
+		return
+	}
+	defer rc.Close()
+	got, err := io.ReadAll(rc)
+	assert.NoError(t, err)
+	assert.Equal(t, want, got)
+}
+
+// When the requested file isn't in the archive we should return a clear
+// error, rather than the silent "no extraction format" that hid the
+// original regression.
+func TestFromTarGzMissingFile(t *testing.T) {
+	tgz := makeTarGz(t, "some/other-file.txt", []byte("x"))
+	src := FromTarGz(&bytesSource{data: tgz}, "GeoLite2-City.mmdb")
+	_, err := src.Fetch(time.Time{})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
 }
