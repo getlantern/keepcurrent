@@ -5,10 +5,10 @@ import (
 	"testing"
 )
 
-// Regression test for the "send on closed channel" crash (Freshdesk #176970):
-// the channel is owned by the caller and may be closed (shutdown / config
-// reload) while a Runner is mid-sync. UpdateFrom must surface that as an error
-// rather than panicking and crashing the whole process.
+// Regression test for the "send on closed channel" crash: the channel is owned
+// by the caller and may be closed (shutdown / config reload) while a Runner is
+// mid-sync. UpdateFrom must surface that as an error rather than panicking and
+// crashing the whole process.
 func TestByteChannelClosedDoesNotPanic(t *testing.T) {
 	ch := make(chan []byte)
 	close(ch)
