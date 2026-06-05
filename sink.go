@@ -1,6 +1,7 @@
 package keepcurrent
 
 import (
+	"fmt"
 	"io"
 	"io/ioutil"
 	"os"
@@ -72,7 +73,17 @@ func ToChannel(ch chan []byte) Sink {
 	return &byteChannel{ch}
 }
 
-func (s *byteChannel) UpdateFrom(r io.Reader) error {
+func (s *byteChannel) UpdateFrom(r io.Reader) (err error) {
+	// The channel is owned by the caller (see ToChannel) and may be closed
+	// concurrently — e.g. on shutdown or config reload — while a Runner is
+	// mid-sync. A send on a closed channel panics, which would crash the whole
+	// process; recover and surface it as a sink error instead (Runner reports
+	// sink errors via OnSinkError rather than dying).
+	defer func() {
+		if rec := recover(); rec != nil {
+			err = fmt.Errorf("send on byte channel: %v", rec)
+		}
+	}()
 	b, err := ioutil.ReadAll(r)
 	if err != nil {
 		return err
