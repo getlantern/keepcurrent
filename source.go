@@ -1,7 +1,6 @@
 package keepcurrent
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -116,14 +115,14 @@ func (s *tarGzSource) Fetch(ifNewerThan time.Time) (io.ReadCloser, error) {
 				return err
 			}
 			defer f.Close()
-			// Pre-size the buffer from the archive entry's uncompressed size so
-			// extracting a large file (e.g. a ~75MB mmdb) is a single allocation
-			// rather than the reallocation churn of io.ReadAll.
-			bb := bytes.NewBuffer(make([]byte, 0, info.Size()+bytes.MinRead))
-			if _, err := bb.ReadFrom(f); err != nil {
+			// Wrap the entry in a size-aware reader so readAll pre-sizes the
+			// buffer from the archive entry's uncompressed size — extracting a
+			// large file (e.g. a ~75MB mmdb) becomes a single allocation rather
+			// than the reallocation churn of io.ReadAll.
+			buf, err = readAll(sizedReadCloser{ReadCloser: f, n: info.Size()})
+			if err != nil {
 				return err
 			}
-			buf = bb.Bytes()
 			return errFound
 		}
 		return nil

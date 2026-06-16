@@ -9,9 +9,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// countingReader wraps a reader and records the largest single Read it was
-// asked to fill, which lets us distinguish a pre-sized read (one big Read) from
-// io.ReadAll's incremental growth.
+// unsizedReader hides any size its wrapped reader might otherwise expose (it
+// implements only Read), forcing readAll down the io.ReadAll fallback path.
 type unsizedReader struct{ r io.Reader }
 
 func (u *unsizedReader) Read(p []byte) (int, error) { return u.r.Read(p) }

@@ -5,6 +5,14 @@ import (
 	"io"
 )
 
+// maxPreAlloc caps how much readAll will allocate up front from a reader's
+// self-reported size. It guards against a bogus or hostile size (e.g. a wildly
+// inflated HTTP Content-Length) turning into a giant make() that panics or
+// OOMs; anything larger falls back to io.ReadAll, which grows against the bytes
+// actually delivered. The bound sits comfortably above the payloads keepcurrent
+// syncs in practice (a MaxMind database is well under 100MB).
+const maxPreAlloc = 256 << 20 // 256 MiB
+
 // readAll reads r to EOF into a single buffer. It differs from io.ReadAll only
 // in that, when r can report how many bytes remain, it allocates that buffer up
 // front. io.ReadAll grows its buffer by repeatedly appending and reallocating,
@@ -14,10 +22,10 @@ import (
 // transient churn dominates memory on small hosts. Pre-sizing turns the read
 // into a single allocation.
 func readAll(r io.Reader) ([]byte, error) {
-	if n, ok := knownSize(r); ok && n >= 0 {
+	if n, ok := knownSize(r); ok && n >= 0 && n <= maxPreAlloc {
 		// +bytes.MinRead leaves room for the final zero-byte read that signals
 		// EOF, so an exactly-sized payload never forces ReadFrom to reallocate.
-		buf := bytes.NewBuffer(make([]byte, 0, n+bytes.MinRead))
+		buf := bytes.NewBuffer(make([]byte, 0, int(n)+bytes.MinRead))
 		_, err := buf.ReadFrom(r)
 		return buf.Bytes(), err
 	}
@@ -55,10 +63,9 @@ func bytesReadCloser(b []byte) io.ReadCloser {
 
 // bytesConsumer is an optional optimization a Sink may implement to receive the
 // payload the Runner has already buffered, instead of being handed an io.Reader
-// that it would have to read into a second full copy. The Runner does not retain
-// or reuse the slice after the call, so a single sink may take ownership; when a
-// caller wires up multiple sinks they share one backing array, so consumers must
-// treat the bytes as read-only.
+// it would have to read into a second full copy. The Runner may pass the same
+// slice to several sinks, so the bytes MUST be treated as read-only; a consumer
+// that needs to retain or mutate them must make its own copy.
 type bytesConsumer interface {
 	updateFromBytes(b []byte) error
 }
