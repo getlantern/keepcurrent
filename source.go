@@ -1,7 +1,6 @@
 package keepcurrent
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -20,6 +19,14 @@ type webSource struct {
 	etag   string
 	mx     sync.RWMutex
 	client *http.Client
+}
+
+// drainClose discards any remaining body and closes it. net/http only returns a
+// connection to the keep-alive pool once its response body has been read to EOF,
+// so error/not-modified responses we don't hand to the caller must be drained.
+func drainClose(rc io.ReadCloser) {
+	_, _ = io.Copy(io.Discard, rc)
+	_ = rc.Close()
 }
 
 // FromWeb constructs a source from the given URL.
@@ -49,14 +56,24 @@ func (s *webSource) Fetch(ifNewerThan time.Time) (io.ReadCloser, error) {
 		return nil, err
 	}
 	if resp.StatusCode == http.StatusNotModified {
+		// Drain to EOF then close so net/http can return the connection to the
+		// pool for keep-alive reuse (it won't reuse one whose body wasn't fully
+		// read). 304 carries no body, so this is effectively just a close here.
+		// We hand the body to the caller only on the success path below.
+		drainClose(resp.Body)
 		return nil, ErrUnmodified
 	}
 	if resp.StatusCode != http.StatusOK {
+		drainClose(resp.Body)
 		return nil, fmt.Errorf("unexpected HTTP status %v", resp.StatusCode)
 	}
 	etag := resp.Header.Get("ETag")
 	if etag != "" {
 		s.setETag(etag)
+	}
+	if resp.ContentLength >= 0 {
+		// Surface the Content-Length so the Runner can pre-size its read buffer.
+		return sizedReadCloser{ReadCloser: resp.Body, n: resp.ContentLength}, nil
 	}
 	return resp.Body, nil
 }
@@ -112,7 +129,11 @@ func (s *tarGzSource) Fetch(ifNewerThan time.Time) (io.ReadCloser, error) {
 				return err
 			}
 			defer f.Close()
-			buf, err = io.ReadAll(f)
+			// Wrap the entry in a size-aware reader so readAll pre-sizes the
+			// buffer from the archive entry's uncompressed size — extracting a
+			// large file (e.g. a ~75MB mmdb) becomes a single allocation rather
+			// than the reallocation churn of io.ReadAll.
+			buf, err = readAll(sizedReadCloser{ReadCloser: f, n: info.Size()})
 			if err != nil {
 				return err
 			}
@@ -122,7 +143,8 @@ func (s *tarGzSource) Fetch(ifNewerThan time.Time) (io.ReadCloser, error) {
 	})
 
 	if errors.Is(err, errFound) {
-		return io.NopCloser(bytes.NewReader(buf)), nil
+		// Return a size-aware reader so the Runner's read can also be pre-sized.
+		return bytesReadCloser(buf), nil
 	}
 	if err != nil {
 		return nil, err

@@ -89,7 +89,12 @@ func (s *byteChannel) UpdateFrom(r io.Reader) (err error) {
 			panic(rec)
 		}
 	}()
-	b, err := ioutil.ReadAll(r)
+	// readAll pre-sizes from the reader's length (the Runner hands us a
+	// *bytes.Reader), so this copy is a single allocation. We deliberately copy
+	// rather than forward the Runner's buffer: ToChannel's contract is that each
+	// delivered slice is independently owned, so consumers may retain or mutate
+	// it freely.
+	b, err := readAll(r)
 	if err != nil {
 		return err
 	}

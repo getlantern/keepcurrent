@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"errors"
 	"io"
-	"io/ioutil"
 	"time"
 )
 
@@ -103,8 +102,10 @@ func (runner *Runner) syncOnce(from Source, chStop chan struct{}) {
 			return
 		}
 		if err == nil {
-			// Read ahead to surface any error reading from the source
-			data, err = ioutil.ReadAll(rc)
+			// Read ahead to surface any error reading from the source. readAll
+			// pre-sizes its buffer when the source reports a length, avoiding the
+			// reallocation churn io.ReadAll incurs on large payloads.
+			data, err = readAll(rc)
 			rc.Close()
 		}
 		if err == nil {
