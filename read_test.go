@@ -3,11 +3,58 @@ package keepcurrent
 import (
 	"bytes"
 	"io"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// FromFile (no preprocessor) must hand back a size-aware reader so the Runner's
+// readAll pre-sizes its buffer rather than falling back to io.ReadAll's
+// doubling growth — the cached-mmdb-at-startup case that regressed otherwise.
+func TestFileSourceIsSizeAware(t *testing.T) {
+	payload := bytes.Repeat([]byte("m"), 3*1024*1024) // 3 MiB
+	path := filepath.Join(t.TempDir(), "cached.bin")
+	require.NoError(t, os.WriteFile(path, payload, 0o644))
+
+	rc, err := FromFile(path).Fetch(time.Time{})
+	require.NoError(t, err)
+	defer rc.Close()
+
+	n, ok := knownSize(rc)
+	assert.True(t, ok, "FromFile reader should report its size")
+	assert.EqualValues(t, len(payload), n)
+
+	got, err := readAll(rc)
+	require.NoError(t, err)
+	assert.Equal(t, payload, got)
+	assert.LessOrEqual(t, cap(got), len(payload)+bytes.MinRead, "must be a single pre-sized allocation, not grown")
+}
+
+// Fetch must honour its "only if modified since" contract: when ifNewerThan is
+// at or after the file's modtime, it returns ErrUnmodified and leaves no reader
+// (hence no leaked descriptor) for the caller to close.
+func TestFileSourceUnmodified(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cached.bin")
+	require.NoError(t, os.WriteFile(path, []byte("payload"), 0o644))
+
+	fi, err := os.Stat(path)
+	require.NoError(t, err)
+
+	// A cutoff strictly after the modtime => unmodified.
+	rc, err := FromFile(path).Fetch(fi.ModTime().Add(time.Hour))
+	assert.ErrorIs(t, err, ErrUnmodified)
+	assert.Nil(t, rc)
+
+	// A cutoff strictly before the modtime => the file is newer, so we fetch.
+	rc, err = FromFile(path).Fetch(fi.ModTime().Add(-time.Hour))
+	require.NoError(t, err)
+	require.NotNil(t, rc)
+	require.NoError(t, rc.Close())
+}
 
 // unsizedReader hides any size its wrapped reader might otherwise expose (it
 // implements only Read), forcing readAll down the io.ReadAll fallback path.

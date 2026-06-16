@@ -6,8 +6,11 @@ import (
 	"compress/gzip"
 	"crypto/rand"
 	"encoding/json"
+	"fmt"
 	"io"
 	"io/ioutil"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -103,7 +106,13 @@ func writeTempFile(t *testing.T, b []byte) (string, []byte) {
 
 func TestUpdateFromWeb(t *testing.T) {
 	ch := make(chan []byte)
-	url := "https://httpbin.org/get"
+	// Serve an httpbin-/get-shaped body locally so the test stays hermetic —
+	// the live httpbin.org dependency intermittently hung and timed out CI.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, `{"url": %q}`, "http://"+r.Host+r.URL.String())
+	}))
+	defer srv.Close()
+	url := srv.URL + "/get"
 	runner := New(FromWeb(url), ToChannel(ch))
 	runner.OnSourceError = func(err error, tries int) time.Duration {
 		assert.Fail(t, "unexpected source error "+err.Error())
