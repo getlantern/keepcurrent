@@ -60,15 +60,3 @@ func (s sizedReadCloser) size() int64 { return s.n }
 func bytesReadCloser(b []byte) io.ReadCloser {
 	return sizedReadCloser{ReadCloser: io.NopCloser(bytes.NewReader(b)), n: int64(len(b))}
 }
-
-// bytesConsumer is an internal optimization implemented by keepcurrent's own
-// sinks (currently byteChannel). When a sink implements it, the Runner hands
-// over the payload it has already buffered instead of an io.Reader the sink
-// would read into a second full copy. The method is unexported by design, so
-// sinks defined outside this package cannot implement it and always go through
-// the Sink.UpdateFrom path. The Runner may pass the same slice to several sinks,
-// so the bytes MUST be treated as read-only; a consumer that needs to retain or
-// mutate them must make its own copy.
-type bytesConsumer interface {
-	updateFromBytes(b []byte) error
-}

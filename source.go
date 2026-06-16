@@ -21,6 +21,14 @@ type webSource struct {
 	client *http.Client
 }
 
+// drainClose discards any remaining body and closes it. net/http only returns a
+// connection to the keep-alive pool once its response body has been read to EOF,
+// so error/not-modified responses we don't hand to the caller must be drained.
+func drainClose(rc io.ReadCloser) {
+	_, _ = io.Copy(io.Discard, rc)
+	_ = rc.Close()
+}
+
 // FromWeb constructs a source from the given URL.
 func FromWeb(url string) Source {
 	return FromWebWithClient(url, http.DefaultClient)
@@ -48,13 +56,15 @@ func (s *webSource) Fetch(ifNewerThan time.Time) (io.ReadCloser, error) {
 		return nil, err
 	}
 	if resp.StatusCode == http.StatusNotModified {
-		// Drain+close so the connection can be reused for keep-alive; we return
-		// the body to the caller only on the success path below.
-		resp.Body.Close()
+		// Drain to EOF then close so net/http can return the connection to the
+		// pool for keep-alive reuse (it won't reuse one whose body wasn't fully
+		// read). 304 carries no body, so this is effectively just a close here.
+		// We hand the body to the caller only on the success path below.
+		drainClose(resp.Body)
 		return nil, ErrUnmodified
 	}
 	if resp.StatusCode != http.StatusOK {
-		resp.Body.Close()
+		drainClose(resp.Body)
 		return nil, fmt.Errorf("unexpected HTTP status %v", resp.StatusCode)
 	}
 	etag := resp.Header.Get("ETag")

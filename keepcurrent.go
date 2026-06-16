@@ -126,15 +126,7 @@ func (runner *Runner) syncOnce(from Source, chStop chan struct{}) {
 		}
 	}
 	for _, s := range runner.sinks {
-		var err error
-		if bc, ok := s.(bytesConsumer); ok {
-			// Hand the already-buffered payload over directly rather than making
-			// the sink read it into a second full copy.
-			err = bc.updateFromBytes(data)
-		} else {
-			err = s.UpdateFrom(bytes.NewReader(data))
-		}
-		if err != nil {
+		if err := s.UpdateFrom(bytes.NewReader(data)); err != nil {
 			runner.OnSinkError(s, err)
 		}
 	}
