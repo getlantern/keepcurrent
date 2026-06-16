@@ -3,11 +3,36 @@ package keepcurrent
 import (
 	"bytes"
 	"io"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// FromFile (no preprocessor) must hand back a size-aware reader so the Runner's
+// readAll pre-sizes its buffer rather than falling back to io.ReadAll's
+// doubling growth — the cached-mmdb-at-startup case that regressed otherwise.
+func TestFileSourceIsSizeAware(t *testing.T) {
+	payload := bytes.Repeat([]byte("m"), 3*1024*1024) // 3 MiB
+	path := filepath.Join(t.TempDir(), "cached.bin")
+	require.NoError(t, os.WriteFile(path, payload, 0o644))
+
+	rc, err := FromFile(path).Fetch(time.Time{})
+	require.NoError(t, err)
+	defer rc.Close()
+
+	n, ok := knownSize(rc)
+	assert.True(t, ok, "FromFile reader should report its size")
+	assert.EqualValues(t, len(payload), n)
+
+	got, err := readAll(rc)
+	require.NoError(t, err)
+	assert.Equal(t, payload, got)
+	assert.LessOrEqual(t, cap(got), len(payload)+bytes.MinRead, "must be a single pre-sized allocation, not grown")
+}
 
 // unsizedReader hides any size its wrapped reader might otherwise expose (it
 // implements only Read), forcing readAll down the io.ReadAll fallback path.

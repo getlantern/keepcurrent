@@ -174,18 +174,26 @@ func (s *fileSource) Fetch(ifNewerThan time.Time) (io.ReadCloser, error) {
 	}
 	fi, err := f.Stat()
 	if err != nil {
+		f.Close()
 		return nil, err
 	}
 	if !ifNewerThan.IsZero() && ifNewerThan.Before(fi.ModTime()) {
+		f.Close()
 		return nil, ErrUnmodified
 	}
-	var result io.ReadCloser
-	result = f
 	if s.preprocessor != nil {
-		result, err = s.preprocessor(f)
+		// A preprocessor may change the byte count, so we can't declare a size
+		// up front; readAll falls back to io.ReadAll for the preprocessed stream.
+		result, err := s.preprocessor(f)
 		if err != nil {
+			f.Close()
 			return nil, err
 		}
+		return result, nil
 	}
-	return result, nil
+	// Surface the file size so the Runner's readAll pre-sizes its buffer instead
+	// of growing by reallocation. The cached payloads read here are exactly the
+	// large ones that churn — e.g. geo loads a ~75MB MaxMind mmdb from disk via
+	// InitFrom(FromFile(...)) at startup.
+	return sizedReadCloser{ReadCloser: f, n: fi.Size()}, nil
 }
