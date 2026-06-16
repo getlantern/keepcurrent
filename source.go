@@ -48,9 +48,13 @@ func (s *webSource) Fetch(ifNewerThan time.Time) (io.ReadCloser, error) {
 		return nil, err
 	}
 	if resp.StatusCode == http.StatusNotModified {
+		// Drain+close so the connection can be reused for keep-alive; we return
+		// the body to the caller only on the success path below.
+		resp.Body.Close()
 		return nil, ErrUnmodified
 	}
 	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
 		return nil, fmt.Errorf("unexpected HTTP status %v", resp.StatusCode)
 	}
 	etag := resp.Header.Get("ETag")

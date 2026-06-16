@@ -41,6 +41,24 @@ func TestReadAllFallsBackForUnsizedReaders(t *testing.T) {
 	assert.Equal(t, payload, got)
 }
 
+func TestReadAllFallsBackWhenSizeExceedsCap(t *testing.T) {
+	// A reader that reports a huge size (e.g. a bogus/hostile Content-Length)
+	// but only delivers a small payload. readAll must not attempt the giant
+	// pre-allocation; it should fall back to io.ReadAll and still return the
+	// real bytes.
+	payload := bytes.Repeat([]byte("z"), 1024)
+	r := sizedReadCloser{ReadCloser: io.NopCloser(bytes.NewReader(payload)), n: maxPreAlloc + 1}
+
+	n, ok := knownSize(r)
+	require.True(t, ok)
+	require.Greater(t, n, int64(maxPreAlloc))
+
+	got, err := readAll(r)
+	require.NoError(t, err)
+	assert.Equal(t, payload, got)
+	assert.LessOrEqual(t, cap(got), maxPreAlloc, "must not pre-allocate the reported (bogus) size")
+}
+
 func TestKnownSize(t *testing.T) {
 	n, ok := knownSize(bytes.NewReader(make([]byte, 42)))
 	assert.True(t, ok)
