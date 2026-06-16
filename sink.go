@@ -73,7 +73,22 @@ func ToChannel(ch chan []byte) Sink {
 	return &byteChannel{ch}
 }
 
-func (s *byteChannel) UpdateFrom(r io.Reader) (err error) {
+func (s *byteChannel) UpdateFrom(r io.Reader) error {
+	b, err := readAll(r)
+	if err != nil {
+		return err
+	}
+	return s.send(b)
+}
+
+// updateFromBytes implements bytesConsumer: the Runner hands us the payload it
+// already buffered, so we forward it to the channel without a redundant copy.
+// See bytesConsumer for the read-only ownership contract.
+func (s *byteChannel) updateFromBytes(b []byte) error {
+	return s.send(b)
+}
+
+func (s *byteChannel) send(b []byte) (err error) {
 	// The channel is owned by the caller (see ToChannel) and may be closed
 	// concurrently — e.g. on shutdown or config reload — while a Runner is
 	// mid-sync. A send on a closed channel panics, which would crash the whole
@@ -89,10 +104,6 @@ func (s *byteChannel) UpdateFrom(r io.Reader) (err error) {
 			panic(rec)
 		}
 	}()
-	b, err := ioutil.ReadAll(r)
-	if err != nil {
-		return err
-	}
 	s.ch <- b
 	return nil
 }

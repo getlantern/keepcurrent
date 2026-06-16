@@ -58,6 +58,10 @@ func (s *webSource) Fetch(ifNewerThan time.Time) (io.ReadCloser, error) {
 	if etag != "" {
 		s.setETag(etag)
 	}
+	if resp.ContentLength >= 0 {
+		// Surface the Content-Length so the Runner can pre-size its read buffer.
+		return sizedReadCloser{ReadCloser: resp.Body, n: resp.ContentLength}, nil
+	}
 	return resp.Body, nil
 }
 
@@ -112,17 +116,22 @@ func (s *tarGzSource) Fetch(ifNewerThan time.Time) (io.ReadCloser, error) {
 				return err
 			}
 			defer f.Close()
-			buf, err = io.ReadAll(f)
-			if err != nil {
+			// Pre-size the buffer from the archive entry's uncompressed size so
+			// extracting a large file (e.g. a ~75MB mmdb) is a single allocation
+			// rather than the reallocation churn of io.ReadAll.
+			bb := bytes.NewBuffer(make([]byte, 0, info.Size()+bytes.MinRead))
+			if _, err := bb.ReadFrom(f); err != nil {
 				return err
 			}
+			buf = bb.Bytes()
 			return errFound
 		}
 		return nil
 	})
 
 	if errors.Is(err, errFound) {
-		return io.NopCloser(bytes.NewReader(buf)), nil
+		// Return a size-aware reader so the Runner's read can also be pre-sized.
+		return bytesReadCloser(buf), nil
 	}
 	if err != nil {
 		return nil, err
