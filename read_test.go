@@ -34,6 +34,28 @@ func TestFileSourceIsSizeAware(t *testing.T) {
 	assert.LessOrEqual(t, cap(got), len(payload)+bytes.MinRead, "must be a single pre-sized allocation, not grown")
 }
 
+// Fetch must honour its "only if modified since" contract: when ifNewerThan is
+// at or after the file's modtime, it returns ErrUnmodified and leaves no reader
+// (hence no leaked descriptor) for the caller to close.
+func TestFileSourceUnmodified(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cached.bin")
+	require.NoError(t, os.WriteFile(path, []byte("payload"), 0o644))
+
+	fi, err := os.Stat(path)
+	require.NoError(t, err)
+
+	// A cutoff strictly after the modtime => unmodified.
+	rc, err := FromFile(path).Fetch(fi.ModTime().Add(time.Hour))
+	assert.ErrorIs(t, err, ErrUnmodified)
+	assert.Nil(t, rc)
+
+	// A cutoff strictly before the modtime => the file is newer, so we fetch.
+	rc, err = FromFile(path).Fetch(fi.ModTime().Add(-time.Hour))
+	require.NoError(t, err)
+	require.NotNil(t, rc)
+	require.NoError(t, rc.Close())
+}
+
 // unsizedReader hides any size its wrapped reader might otherwise expose (it
 // implements only Read), forcing readAll down the io.ReadAll fallback path.
 type unsizedReader struct{ r io.Reader }

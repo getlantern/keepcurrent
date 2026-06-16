@@ -157,6 +157,22 @@ type fileSource struct {
 	preprocessor func(io.ReadCloser) (io.ReadCloser, error)
 }
 
+// fileBackedReadCloser ties a preprocessed stream's lifetime to the file it was
+// derived from, closing both when Close is called. A double close of the file
+// (when the preprocessor's stream already closes it) is tolerated.
+type fileBackedReadCloser struct {
+	io.ReadCloser
+	f *os.File
+}
+
+func (r fileBackedReadCloser) Close() error {
+	err := r.ReadCloser.Close()
+	if cerr := r.f.Close(); cerr != nil && !errors.Is(cerr, os.ErrClosed) && err == nil {
+		err = cerr
+	}
+	return err
+}
+
 // FromFile constructs a source from the given file path.
 func FromFile(path string) Source {
 	return &fileSource{path, nil}
@@ -177,7 +193,10 @@ func (s *fileSource) Fetch(ifNewerThan time.Time) (io.ReadCloser, error) {
 		f.Close()
 		return nil, err
 	}
-	if !ifNewerThan.IsZero() && ifNewerThan.Before(fi.ModTime()) {
+	// Fetch's contract is "fetch only if modified since ifNewerThan", so we
+	// signal ErrUnmodified when the file is no newer than the cutoff — mirroring
+	// byteSource.Fetch in the tests. (Earlier this comparison was inverted.)
+	if !ifNewerThan.IsZero() && !fi.ModTime().After(ifNewerThan) {
 		f.Close()
 		return nil, ErrUnmodified
 	}
@@ -189,7 +208,10 @@ func (s *fileSource) Fetch(ifNewerThan time.Time) (io.ReadCloser, error) {
 			f.Close()
 			return nil, err
 		}
-		return result, nil
+		// The preprocessor may hand back a stream that doesn't close the file it
+		// wraps (e.g. io.NopCloser), so couple Close to the underlying file to
+		// avoid leaking the descriptor.
+		return fileBackedReadCloser{ReadCloser: result, f: f}, nil
 	}
 	// Surface the file size so the Runner's readAll pre-sizes its buffer instead
 	// of growing by reallocation. The cached payloads read here are exactly the
