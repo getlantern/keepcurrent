@@ -244,17 +244,18 @@ func (r modTimeReadCloser) size() int64 {
 	return -1
 }
 
-// writesBack reports whether sink s is the file that source from reads, which a
-// sync must not rewrite with what it just read from it: rewriting moves the
-// file's modification time to now, so the next Runner to start from it would
-// take an old file for a fresh one.
+// writesBack reports whether sink s would copy source from's file onto itself
+// unchanged, which a sync skips: the rewrite changes nothing but the file's
+// modification time, which moves to now, so the next Runner to start from it
+// would take an old file for a fresh one. A preprocessor on either side can
+// change the contents, so those writes still happen.
 func writesBack(from Source, s Sink) bool {
 	src, ok := from.(*fileSource)
-	if !ok {
+	if !ok || src.preprocessor != nil {
 		return false
 	}
 	dst, ok := s.(*fileSink)
-	if !ok {
+	if !ok || dst.preprocessor != nil {
 		return false
 	}
 	a, errA := filepath.Abs(src.path)

@@ -1,10 +1,12 @@
 package keepcurrent
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -115,4 +117,20 @@ func TestWebSourceSendsIfModifiedSinceInGMT(t *testing.T) {
 	_, err := FromWeb(srv.URL).Fetch(cutoff)
 	assert.ErrorIs(t, err, ErrUnmodified)
 	assert.Equal(t, "Thu, 08 Oct 2026 23:15:00 GMT", got)
+}
+
+// A sink that preprocesses still writes to the file the source read, since
+// its output can differ from what was read.
+func TestInitFromStillWritesAPreprocessedCopyInPlace(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "db")
+	require.NoError(t, os.WriteFile(path, []byte("cached"), 0644))
+	upper := func(r io.Reader) (io.Reader, error) {
+		b, err := io.ReadAll(r)
+		return strings.NewReader(strings.ToUpper(string(b))), err
+	}
+	runner := New(FromWeb("http://127.0.0.1:1/unused"), ToFileWithPreprocessor(path, upper))
+	runner.InitFrom(FromFile(path))
+	b, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, "CACHED", string(b))
 }
