@@ -134,3 +134,52 @@ func TestInitFromStillWritesAPreprocessedCopyInPlace(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "CACHED", string(b))
 }
+
+// A cached file dated in the future says nothing about its age, so the first
+// web check is unconditional and fetches a copy published before that date.
+func TestInitFromFutureDatedFileFetchesTheWebCopy(t *testing.T) {
+	published := time.Now().Add(-time.Hour).Truncate(time.Second)
+	srv := lastModifiedServer(t, published, "new")
+
+	path := filepath.Join(t.TempDir(), "db")
+	require.NoError(t, os.WriteFile(path, []byte("old"), 0644))
+	future := time.Now().Add(48 * time.Hour)
+	require.NoError(t, os.Chtimes(path, future, future))
+
+	ch := make(chan []byte, 4)
+	runner := New(FromWeb(srv.URL), ToFile(path), ToChannel(ch))
+	runner.InitFrom(FromFile(path))
+	assert.Equal(t, "old", string(<-ch))
+	stop := runner.Start(time.Hour)
+	defer stop()
+	select {
+	case got := <-ch:
+		assert.Equal(t, "new", string(got))
+	case <-time.After(5 * time.Second):
+		t.Fatal("a future-dated cached file kept the runner from fetching the web copy")
+	}
+}
+
+// A sink that reaches the source's file through a symlink is the same file, so
+// InitFrom doesn't rewrite it either.
+func TestInitFromKeepsTheAgeThroughASymlink(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "db")
+	link := filepath.Join(dir, "db-link")
+	require.NoError(t, os.WriteFile(path, []byte("cached"), 0644))
+	require.NoError(t, os.Symlink(path, link))
+	cached := time.Now().Add(-48 * time.Hour).Truncate(time.Second)
+	require.NoError(t, os.Chtimes(path, cached, cached))
+
+	ch := make(chan []byte, 1)
+	runner := New(FromWeb("http://127.0.0.1:1/unused"), ToFile(link), ToChannel(ch))
+	runner.InitFrom(FromFile(path))
+	assert.Equal(t, "cached", string(<-ch))
+
+	fi, err := os.Lstat(link)
+	require.NoError(t, err)
+	assert.NotZero(t, fi.Mode()&os.ModeSymlink, "the link is still a link")
+	fi, err = os.Stat(path)
+	require.NoError(t, err)
+	assert.True(t, fi.ModTime().Equal(cached), "modtime %v, want %v", fi.ModTime(), cached)
+}

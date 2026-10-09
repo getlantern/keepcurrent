@@ -108,9 +108,14 @@ func (runner *Runner) syncOnce(from Source, chStop chan struct{}) {
 			// reallocation churn io.ReadAll incurs on large payloads.
 			data, err = readAll(rc)
 			rc.Close()
-			// Data read from a file is as old as the file, not as the read.
+			// Data read from a file is as old as the file, not as the read. A
+			// modification time after the read (clock skew, a copied file) says
+			// nothing about the data's age, so the next check is unconditional.
 			if m, ok := rc.(interface{ sourceModTime() time.Time }); ok {
 				updated = m.sourceModTime()
+				if updated.After(start) {
+					updated = time.Time{}
+				}
 			}
 		}
 		if err == nil {

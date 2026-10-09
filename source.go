@@ -258,6 +258,13 @@ func writesBack(from Source, s Sink) bool {
 	if !ok || dst.preprocessor != nil {
 		return false
 	}
+	// Two paths can name one file (a symlink, a relative path): compare the
+	// files themselves when both exist.
+	if srcInfo, err := os.Stat(src.path); err == nil {
+		if dstInfo, err := os.Stat(dst.path); err == nil {
+			return os.SameFile(srcInfo, dstInfo)
+		}
+	}
 	a, errA := filepath.Abs(src.path)
 	b, errB := filepath.Abs(dst.path)
 	return errA == nil && errB == nil && a == b
