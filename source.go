@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -46,7 +47,9 @@ func (s *webSource) Fetch(ifNewerThan time.Time) (io.ReadCloser, error) {
 		return nil, err
 	}
 	if !ifNewerThan.IsZero() {
-		req.Header.Add("If-Modified-Since", ifNewerThan.Format(http.TimeFormat))
+		// http.TimeFormat is GMT, so the time must be in UTC first; formatted in
+		// local time it would claim a different instant on any host not on UTC.
+		req.Header.Add("If-Modified-Since", ifNewerThan.UTC().Format(http.TimeFormat))
 	}
 	if s.getETag() != "" {
 		req.Header.Add("If-None-Match", s.etag)
@@ -211,11 +214,50 @@ func (s *fileSource) Fetch(ifNewerThan time.Time) (io.ReadCloser, error) {
 		// The preprocessor may hand back a stream that doesn't close the file it
 		// wraps (e.g. io.NopCloser), so couple Close to the underlying file to
 		// avoid leaking the descriptor.
-		return fileBackedReadCloser{ReadCloser: result, f: f}, nil
+		return modTimeReadCloser{ReadCloser: fileBackedReadCloser{ReadCloser: result, f: f}, mod: fi.ModTime()}, nil
 	}
 	// Surface the file size so the Runner's readAll pre-sizes its buffer instead
 	// of growing by reallocation. The cached payloads read here are exactly the
 	// large ones that churn — e.g. geo loads a ~75MB MaxMind mmdb from disk via
 	// InitFrom(FromFile(...)) at startup.
-	return sizedReadCloser{ReadCloser: f, n: fi.Size()}, nil
+	return modTimeReadCloser{ReadCloser: sizedReadCloser{ReadCloser: f, n: fi.Size()}, mod: fi.ModTime()}, nil
+}
+
+// modTimeReadCloser is a file's contents with the file's modification time, so
+// a Runner records how old the data it loaded is rather than when it loaded it.
+// Without this, a Runner initialised from an older cached file would ask its
+// web source only for data newer than the moment it started, and never fetch
+// an update published between the file's download and that moment.
+type modTimeReadCloser struct {
+	io.ReadCloser
+	mod time.Time
+}
+
+func (r modTimeReadCloser) sourceModTime() time.Time { return r.mod }
+
+// size passes through the wrapped reader's size, or -1 (unknown) when it has
+// none, so readAll still pre-sizes a plain file read.
+func (r modTimeReadCloser) size() int64 {
+	if n, ok := knownSize(r.ReadCloser); ok {
+		return n
+	}
+	return -1
+}
+
+// writesBack reports whether sink s is the file that source from reads, which a
+// sync must not rewrite with what it just read from it: rewriting moves the
+// file's modification time to now, so the next Runner to start from it would
+// take an old file for a fresh one.
+func writesBack(from Source, s Sink) bool {
+	src, ok := from.(*fileSource)
+	if !ok {
+		return false
+	}
+	dst, ok := s.(*fileSink)
+	if !ok {
+		return false
+	}
+	a, errA := filepath.Abs(src.path)
+	b, errB := filepath.Abs(dst.path)
+	return errA == nil && errB == nil && a == b
 }

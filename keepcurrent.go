@@ -101,18 +101,23 @@ func (runner *Runner) syncOnce(from Source, chStop chan struct{}) {
 		if err == ErrUnmodified {
 			return
 		}
+		updated := start
 		if err == nil {
 			// Read ahead to surface any error reading from the source. readAll
 			// pre-sizes its buffer when the source reports a length, avoiding the
 			// reallocation churn io.ReadAll incurs on large payloads.
 			data, err = readAll(rc)
 			rc.Close()
+			// Data read from a file is as old as the file, not as the read.
+			if m, ok := rc.(interface{ sourceModTime() time.Time }); ok {
+				updated = m.sourceModTime()
+			}
 		}
 		if err == nil {
 			err = runner.Validate(data)
 		}
 		if err == nil {
-			runner.lastUpdated = start
+			runner.lastUpdated = updated
 			break
 		}
 		d := runner.OnSourceError(err, tries)
@@ -126,6 +131,9 @@ func (runner *Runner) syncOnce(from Source, chStop chan struct{}) {
 		}
 	}
 	for _, s := range runner.sinks {
+		if writesBack(from, s) {
+			continue
+		}
 		if err := s.UpdateFrom(bytes.NewReader(data)); err != nil {
 			runner.OnSinkError(s, err)
 		}
